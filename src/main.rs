@@ -66,6 +66,16 @@ use reqwest;
 use serde;
 use serde_json;
 
+#[derive(Debug)]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AcmecOrder {
+	url: String,
+	challenges: Vec<String>,
+	finalize: String,
+	dns_names: Vec<String>,
+}
+
+#[derive(Debug)]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct AcmecConfig {
 	// account key
@@ -73,14 +83,16 @@ struct AcmecConfig {
 	kid: String,
 	
 	// current pending order
-	order: Option<String>,
+	order: Option<AcmecOrder>,
 }
 
+#[derive(Debug)]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct AcmeIdentifier {
 	value: String,
 }
 
+#[derive(Debug)]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct AcmeChallenge {
 	url: String,
@@ -89,6 +101,7 @@ struct AcmeChallenge {
 	token: String,
 }
 
+#[derive(Debug)]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct AcmeAuthorization {
 	status: String,
@@ -96,11 +109,13 @@ struct AcmeAuthorization {
 	challenges: Vec<AcmeChallenge>,
 }
 
+#[derive(Debug)]
 #[derive(serde::Serialize, serde::Deserialize)]
 struct AcmeOrder {
 	status: String,
 	authorizations: Vec<String>,
 	finalize: String,
+	certificate: Option<String>,
 }
 
 struct RelevantAcmeDirectory<'a> {
@@ -110,9 +125,9 @@ struct RelevantAcmeDirectory<'a> {
 	terms_of_service: &'a str,
 }
 const ACME_DIRECTORY: RelevantAcmeDirectory = RelevantAcmeDirectory {
-	new_nonce: "https://acme-staging-v02.api.letsencrypt.org/acme/new-nonce",
-	new_account: "https://acme-staging-v02.api.letsencrypt.org/acme/new-acct",
-	new_order: "https://acme-staging-v02.api.letsencrypt.org/acme/new-order",
+	new_nonce: "https://acme-v02.api.letsencrypt.org/acme/new-nonce",
+	new_account: "https://acme-v02.api.letsencrypt.org/acme/new-acct",
+	new_order: "https://acme-v02.api.letsencrypt.org/acme/new-order",
 	terms_of_service: "https://letsencrypt.org/documents/LE-SA-v1.2-November-15-2017.pdf",
 };
 
@@ -121,7 +136,7 @@ fn ektyn(kp: &pkey::PKey<pkey::Private>) -> Result<String, Box<dyn Error>> {
 	return Ok(format!(
 		r#"{{"e":{},"kty":"RSA","n":{}}}"#,
 		serde_json::to_string(&(b64ue(&(rsa.e().to_vec()))))?,
-		serde_json::to_string(&(b64ue(&(rsa.n().to_vec()))))?
+		serde_json::to_string(&(b64ue(&(rsa.n().to_vec()))))?,
 	));
 }
 fn token_shit(kp: &pkey::PKey<pkey::Private>, token: String) -> Result<String, Box<dyn Error>> {
@@ -159,12 +174,12 @@ fn token_shit(kp: &pkey::PKey<pkey::Private>, token: String) -> Result<String, B
 	let hash = hasher.finish();
 	return Ok(b64ue(&(hash)));
 }
-fn jws(kp: &pkey::PKey<pkey::Private>, acct: Option<&String>, nonce: String, url: &str, payload: &str) -> Result<String, Box<dyn Error>> {
+fn jws(kp: &pkey::PKey<pkey::Private>, acct: Option<&str>, nonce: &str, url: &str, payload: &str) -> Result<String, Box<dyn Error>> {
 	let key = match acct {
 		Some(url) => {
 			format!(
 				r#""kid": {}"#,
-				serde_json::to_string(&(url))?
+				serde_json::to_string(url)?,
 			)
 		},
 		None => {
@@ -179,8 +194,8 @@ fn jws(kp: &pkey::PKey<pkey::Private>, acct: Option<&String>, nonce: String, url
 			"url": {}
 		}}"#,
 		key,
-		serde_json::to_string(&(nonce))?,
-		serde_json::to_string(&(url))?
+		serde_json::to_string(nonce)?,
+		serde_json::to_string(url)?,
 	).as_bytes());
 	let body = b64ue(payload.as_bytes());
 	let data_to_sign = format!("{}.{}", header, body);
@@ -195,10 +210,36 @@ fn jws(kp: &pkey::PKey<pkey::Private>, acct: Option<&String>, nonce: String, url
 		}}"#,
 		serde_json::to_string(&(header))?,
 		serde_json::to_string(&(body))?,
-		serde_json::to_string(&(signature))?
+		serde_json::to_string(&(signature))?,
 	));
 }
 
+fn get_nonce(cl: &mut reqwest::blocking::Client) -> Result<String, Box<dyn Error>> {
+	let resp = cl.head(ACME_DIRECTORY.new_nonce).send()?;
+	let headers = resp.headers();
+	let replay_nonce = headers.get("replay-nonce").ok_or("failed to get Replay-Nonce")?;
+	return Ok(replay_nonce.to_str()?.to_string());
+}
+
+fn acme_post(
+	creds: &mut(
+		&mut reqwest::blocking::Client,
+		&pkey::PKey<pkey::Private>,
+		Option<&str>
+	),
+	
+	url: &str,
+	payload: &str
+) -> Result<reqwest::blocking::Response, Box<dyn Error>> {
+	let (ref mut cl, ref kp, ref kid) = creds;
+	return Ok(cl.post(url).body(jws(
+		kp,
+		*kid,
+		&(get_nonce(cl)?),
+		url,
+		payload,
+	)?).header("content-type", "application/jose+json").send()?);
+}
 /*
  * csr (required, string):  A CSR encoding the parameters for the
  * certificate being requested [RFC2986].  The CSR is sent in the
@@ -207,7 +248,7 @@ fn jws(kp: &pkey::PKey<pkey::Private>, acct: Option<&String>, nonce: String, url
 fn b64ue_csr(csr: X509Req) -> Result<String, Box<dyn Error>> {
 	return Ok(b64ue(&(csr.to_der()?)));
 }
-fn gen_csr(kp: &pkey::PKey<pkey::Private>, dns_names: Vec<String>) -> Result<X509Req, Box<dyn Error>> {
+fn gen_csr(kp: &pkey::PKey<pkey::Private>, dns_names: &Vec<String>) -> Result<X509Req, Box<dyn Error>> {
 	let mut builder = X509Req::builder()?;
 	let mut alt_names = SubjectAlternativeName::new();
 	for dns_name in dns_names {
@@ -222,33 +263,18 @@ fn gen_csr(kp: &pkey::PKey<pkey::Private>, dns_names: Vec<String>) -> Result<X50
 	return Ok(builder.build());
 }
 
-fn create_account(cl: &mut reqwest::blocking::Client, kp_passphrase: &[u8]) -> Result<AcmecConfig, Box<dyn Error>> {
-	let kp = pkey::PKey::from_rsa(Rsa::generate(2048)?)?;
-	let resp = cl.post(ACME_DIRECTORY.new_account).body(jws(
-		&(kp),
-		None,
-		get_nonce(cl)?,
-		ACME_DIRECTORY.new_account,
-		"{ \"termsOfServiceAgreed\": true }",
-	)?).header("content-type", "application/jose+json").send()?;
+fn create_account(cl: &mut reqwest::blocking::Client, kp: &pkey::PKey<pkey::Private>) -> Result<String, Box<dyn Error>> {
+	let resp = acme_post(
+		&mut(cl, kp, None),
+		ACME_DIRECTORY.new_account, "{ \"termsOfServiceAgreed\": true }",
+	)?;
 	if !resp.status().is_success() {
 		let text = resp.text()?;
 		return Err(Box::new(throw(text)));
 	}
 	let headers = resp.headers();
 	let location = headers.get("location").ok_or("failed to get Location")?;
-	return Ok(AcmecConfig {
-		pem_kp: kp.private_key_to_pem_pkcs8_passphrase(openssl::symm::Cipher::aes_256_cbc(), kp_passphrase)?,
-		kid: location.to_str()?.to_string(), // yippee, i am elated.
-		order: None,
-	});
-}
-
-fn get_nonce(cl: &mut reqwest::blocking::Client) -> Result<String, Box<dyn Error>> {
-	let resp = cl.head(ACME_DIRECTORY.new_nonce).send()?;
-	let headers = resp.headers();
-	let replay_nonce = headers.get("replay-nonce").ok_or("failed to get Replay-Nonce")?;
-	return Ok(replay_nonce.to_str()?.to_string());
+	return Ok(location.to_str()?.to_string());
 }
 
 fn write_cfg(file: &mut File, cfg: &AcmecConfig) -> Result<(), Box<dyn Error>> {
@@ -258,22 +284,20 @@ fn write_cfg(file: &mut File, cfg: &AcmecConfig) -> Result<(), Box<dyn Error>> {
 	return Ok(());
 }
 
-fn delete_account(path: &str, cfg: Option<(&mut reqwest::blocking::Client, &String, &pkey::PKey<pkey::Private>)>) -> Result<(), Box<dyn Error>> {
-	std::fs::remove_file(&(path))?;
-	if let Some(cfg_t) = cfg {
-		cfg_t.0.post(cfg_t.1).body(jws(
-			cfg_t.2,
-			Some(cfg_t.1),
-			get_nonce(cfg_t.0)?,
-			cfg_t.1,
-			"{ \"status\": \"deactivated\" }",
-		)?).header("content-type", "application/jose+json").send()?;
-	}
+fn deactivate(path_to_config: &str, creds: &mut(
+	&mut reqwest::blocking::Client,
+	&pkey::PKey<pkey::Private>,
+	Option<&str>
+)) -> Result<(), Box<dyn Error>> {
+	std::fs::remove_file(&(path_to_config))?;
+	acme_post(
+		creds,
+		creds.2.unwrap(), r#"{ "status": "deactivated" }"#,
+	)?;
 	return Ok(());
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-	let mut cl = reqwest::blocking::Client::new();
 	let pem_passphrase = env::var_os("ACMEC_PASSPHRASE").expect("expected environment variable AMCEC_PASSPHRASE to be valid");
 	
 	let mut args_iter = env::args();
@@ -292,16 +316,22 @@ fn main() -> Result<(), Box<dyn Error>> {
 		}
 		file_options.create_new(true);
 		let mut file = file_options.open(&(path_to_config))?;
-		let cfg = match create_account(&mut(cl), pem_passphrase.as_os_str().as_bytes()) {
-			Ok(config) => config,
-			Err(err) => {
-				delete_account(&(path_to_config), None)?;
-				return Err(err);
+		let mut cl = reqwest::blocking::Client::new();
+		let kp = pkey::PKey::from_rsa(Rsa::generate(2048)?)?;
+		let cfg = AcmecConfig {
+			pem_kp: kp.private_key_to_pem_pkcs8_passphrase(openssl::symm::Cipher::aes_256_cbc(), pem_passphrase.as_os_str().as_bytes())?,
+			kid: match create_account(&mut(cl), &(kp)) {
+				Ok(kid) => kid,
+				Err(err) => {
+					std::fs::remove_file(&(path_to_config))?;
+					return Err(err);
+				}
 			},
+			order: None,
 		};
 		if let Err(err) = write_cfg(&mut(file), &(cfg)) {
 			let kp = pkey::PKey::private_key_from_pem_passphrase(&(cfg.pem_kp), pem_passphrase.as_os_str().as_bytes())?;
-			delete_account(&(path_to_config), Some((&mut(cl), &(cfg.kid), &(kp))))?;
+			deactivate(&(path_to_config), &mut(&mut(cl), &(kp), Some(&(cfg.kid))))?;
 			return Err(err);
 		};
 		return Ok(());
@@ -310,11 +340,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 	let mut file = file_options.open(&(path_to_config))?;
 	
 	let mut cfg: AcmecConfig = serde_json::from_reader(&(file))?;
+	let mut cl = reqwest::blocking::Client::new();
 	let kp = pkey::PKey::private_key_from_pem_passphrase(&(cfg.pem_kp), pem_passphrase.as_os_str().as_bytes())?;
+	let kid = cfg.kid.to_string();
+	let mut tuple = (&mut(cl), &(kp), Some(kid.as_str()));
 	
 	if action == "delete" {
-		delete_account(&(path_to_config), Some((&mut(cl), &(cfg.kid), &(kp))))?;
-		return Ok(());
+		return deactivate(&(path_to_config), &mut(tuple));
 	}
 	
 	if action != "order" {
@@ -327,47 +359,107 @@ fn main() -> Result<(), Box<dyn Error>> {
 			panic!("there is already a pending order");
 		}
 		let mut payload = String::from(r#"{"identifiers":["#);
-		let mut dns_name = args_iter.next().expect("no dns names were passed");
+		let dns_names: Vec<String> = args_iter.collect();
+		let mut iter = dns_names.iter();
+		let mut dns_name = iter.next().expect("no dns names were passed");
 		loop {
 			payload += &(format!(r#"{{"type":"dns","value":{}}}"#, serde_json::to_string(&(dns_name))?));
-			if let Some(next) = args_iter.next() {
-				dns_name = next;
+			if let Some(next) = iter.next() {
+				dns_name = &(next);
 				payload.push(',');
 			} else {
 				break;
 			}
 		}
 		payload.push_str("]}");
-		let resp = cl.post(ACME_DIRECTORY.new_order).body(jws(
-			&(kp),
-			Some(&(cfg.kid)),
-			get_nonce(&mut(cl))?,
-			ACME_DIRECTORY.new_order,
-			&(payload),
-		)?).header("content-type", "application/jose+json").send()?;
+		let resp = acme_post(
+			&mut(tuple),
+			ACME_DIRECTORY.new_order, &(payload),
+		)?;
 		if !resp.status().is_success() {
 			let text = resp.text()?;
 			panic!("{}", text);
 		}
 		let headers = resp.headers();
-		cfg.order = Some(headers.get("location").ok_or("failed to get Location")?.to_str()?.to_string());
-	} else if action == "try-finalize" {
+		let location = headers.get("location").ok_or("failed to get Location")?.to_str()?.to_string();
+		let order: AcmeOrder = resp.json()?;
+		
+		let mut challenge_urls = Vec::new();
+		let mut output_string = String::new();
+		for auth_url in &(order.authorizations) {
+			let resp = acme_post(
+				&mut(tuple),
+				auth_url, "",
+			)?;
+			let auth: AcmeAuthorization = resp.json()?;
+			let challenge: AcmeChallenge = auth.challenges.into_iter().find(|challenge| &(challenge.r#type) == "dns-01").expect("no dns-01 challenge");
+			challenge_urls.push(challenge.url);
+			output_string += &(format!("_acme-challenge.{} {}", auth.identifier.value, token_shit(&(kp), challenge.token)?));
+		}
+		cfg.order = Some(AcmecOrder {
+			url: location,
+			challenges: challenge_urls,
+			finalize: order.finalize.to_string(),
+			dns_names: dns_names,
+		});
+		write_cfg(&mut(file), &(cfg))?;
+		println!("{}", output_string);
+		return Ok(());
+	} else if action == "finalize" {
+		let mut cert_file = File::options().write(true).create(true).open(args_iter.next().expect("expected path to cert file"))?;
+		let mut pkey_file = File::options().write(true).create(true).open(args_iter.next().expect("expected path to pkey file"))?;
 		let order = match cfg.order {
-			Some(ref order) => order,
+			Some(order) => order,
 			None => panic!("there is no pending order"),
 		};
-		let pkey_passphrase = env::var_os("AMCEC_PKEY_PASSPHRASE").expect("expected environment variable ACMEC_PKEY_PASSPHRASE to be valid");
-		// check pending challenges
-		// generate csr
-	} else if action == "cancel" {
-		let order = match cfg.order {
-			Some(ref order) => order,
-			None => panic!("there is no pending order"),
-		};
+		cfg.order = None;
+		write_cfg(&mut(file), &(cfg))?;
+		let pkey_passphrase = env::var_os("ACMEC_PKEY_PASSPHRASE").expect("expected environment variable ACMEC_PKEY_PASSPHRASE to be valid");
+		for url in &(order.challenges) {
+			acme_post(
+				&mut(tuple),
+				&(url), r#"{}"#,
+			)?;
+		}
+		loop {
+			std::thread::sleep(std::time::Duration::from_secs(5));
+			let resp = acme_post(
+				&mut(tuple),
+				&(order.url), "",
+			)?;
+			let acme_order: AcmeOrder = resp.json()?;
+			match acme_order.status.as_str() {
+				"ready" => break,
+				"pending" => continue,
+				_ => panic!("error"),
+			}
+		}
+		let kp = pkey::PKey::from_rsa(Rsa::generate(2048)?)?;
+		acme_post(
+			&mut(tuple),
+			&(order.finalize), &(format!(r#"{{ "csr": {} }}"#, serde_json::to_string(&(b64ue_csr(gen_csr(&(kp), &(order.dns_names))?)?))?)),
+		)?;
+		let mut acme_order: AcmeOrder;
+		loop {
+			std::thread::sleep(std::time::Duration::from_secs(5));
+			let resp = acme_post(
+				&mut(tuple),
+				&(order.url), "",
+			)?;
+			acme_order = resp.json()?;
+			match acme_order.status.as_str() {
+				"valid" => break,
+				"processing" => continue,
+				_ => panic!("error"),
+			}
+		}
+		cert_file.write_all(acme_post(
+			&mut(tuple),
+			&(acme_order.certificate.expect("expected acme certificate")), "",
+		)?.text()?.as_bytes())?;
+		pkey_file.write_all(&(kp.private_key_to_pem_pkcs8_passphrase(openssl::symm::Cipher::aes_256_cbc(), pkey_passphrase.as_os_str().as_bytes())?))?;
+		return Ok(());
 	} else {
 		panic!("invalid action");
 	}
-	
-	write_cfg(&mut(file), &(cfg))?;
-	return Ok(());
 }
