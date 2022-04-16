@@ -298,7 +298,7 @@ fn deactivate(path_to_config: &str, creds: &mut(
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-	let pem_passphrase = env::var_os("ACMEC_PASSPHRASE").expect("expected environment variable AMCEC_PASSPHRASE to be valid");
+	let pem_passphrase = env::var_os("ACMEC_PASSPHRASE").expect("expected environment variable ACMEC_PASSPHRASE to be valid");
 	
 	let mut args_iter = env::args();
 	args_iter.next().expect("expected program path");
