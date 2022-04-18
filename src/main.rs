@@ -21,7 +21,7 @@
 */
 
 // jws uses account key
-// csr uses certificate's public key's corresponding private key
+// csrs embed public keys of keypairs generated per certificate; csr representations are placed in a jws payload
 
 use std::env;
 use std::fs::File;
