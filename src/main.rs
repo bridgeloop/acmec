@@ -422,7 +422,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 			)?;
 		}
 		loop {
-			std::thread::sleep(std::time::Duration::from_secs(5));
+			std::thread::sleep(std::time::Duration::from_secs(3));
 			let resp = acme_post(
 				&mut(tuple),
 				&(order.url), "",
@@ -441,7 +441,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 		)?;
 		let mut acme_order: AcmeOrder;
 		loop {
-			std::thread::sleep(std::time::Duration::from_secs(5));
+			std::thread::sleep(std::time::Duration::from_secs(3));
 			let resp = acme_post(
 				&mut(tuple),
 				&(order.url), "",
