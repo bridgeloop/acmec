@@ -277,7 +277,8 @@ fn main() -> Result<(), &'static str> {
 		return Ok(());
 	}
 
-	let account_details = config_file.account_details().ok_or("invalid config file")?;
+	let borrow = config_file.account_details();
+	let account_details = borrow.as_ref().ok_or("invalid config file")?;
 	let kp = if let Some(passphrase) = pem_passphrase {
 		PKey::private_key_from_pem_passphrase(&(account_details.pem_kp), passphrase.as_os_str().as_bytes())
 	} else {
@@ -285,6 +286,7 @@ fn main() -> Result<(), &'static str> {
 	}.map_err(|_| "failed to decode account keypair pem")?;
 	let mut context = AcmecContext::new(&(kp));
 	context.set_key_id(account_details.kid.clone());
+	drop(borrow);
 
 	match action.as_str() {
 		"delete" => {
@@ -293,7 +295,8 @@ fn main() -> Result<(), &'static str> {
 		}
 		"order" => match args_iter.next().as_deref() {
 			Some("place") => {
-				config_file.order_details().map_or(Ok(()), |_| Err("there is already an order pending"))?;
+				config_file.order_details().as_ref().map_or(Ok(()), |_| Err("there is already an order pending"))?;
+
 				let mut payload = String::from(r#"{"identifiers":["#);
 				let dns_names: Vec<String> = args_iter.collect();
 				let mut iter = dns_names.iter();
@@ -343,7 +346,8 @@ fn main() -> Result<(), &'static str> {
 				return Ok(());
 			},
 			Some("finalize") => {
-				let Some(order) = config_file.order_details() else {
+				let borrow = config_file.order_details();
+				let Some(order) = borrow.as_ref() else {
 					return Err("no order pending");
 				};
 
@@ -365,6 +369,7 @@ fn main() -> Result<(), &'static str> {
 						"pending" => (),
 						status => {
 							eprintln!("order status: {status}");
+							drop(borrow);
 							config_file.discard_order()?;
 							return Err("bad order status");
 						}
@@ -372,7 +377,8 @@ fn main() -> Result<(), &'static str> {
 					std::thread::sleep(std::time::Duration::from_secs(3));
 				}
 
-				let (cert_kp, pkey_pem) = if let Some(pkey_pem) = config_file.pkey_pem() {
+				let mut pem_borrow = config_file.pkey_pem();
+				let (cert_kp, pkey_pem) = if let Some(pkey_pem) = pem_borrow.as_ref() {
 					let cert_kp = if let Some(passphrase) = &(pkey_passphrase) {
 						PKey::private_key_from_pem_passphrase(&(pkey_pem), passphrase.as_os_str().as_bytes())
 					} else {
@@ -383,6 +389,7 @@ fn main() -> Result<(), &'static str> {
 				} else {
 					let cert_kp = Rsa::generate(2048).and_then(|keypair| PKey::from_rsa(keypair)).map_err(|_| "failed to generate rsa keypair")?;
 
+					drop(pem_borrow);
 					config_file.set_pkey_pem(
 						if let Some(passphrase) = &(pkey_passphrase) {
 							cert_kp.private_key_to_pem_pkcs8_passphrase(Cipher::aes_256_cbc(), passphrase.as_os_str().as_bytes())
@@ -391,7 +398,8 @@ fn main() -> Result<(), &'static str> {
 						}.map_err(|_| "failed to serialize private key")?
 					)?;
 
-					(cert_kp, config_file.pkey_pem().unwrap())
+					pem_borrow = config_file.pkey_pem();
+					(cert_kp, pem_borrow.as_ref().unwrap())
 				};
 
 				let pkey_pem_view = from_utf8(&(pkey_pem)).map_err(|_| "invalid utf-8 bytes in pem-encoded private key")?;
@@ -414,6 +422,8 @@ fn main() -> Result<(), &'static str> {
 						status => {
 							eprintln!("order status: {status}");
 							// safe to discard order i think
+							drop(borrow);
+							drop(pem_borrow);
 							config_file.discard_order()?;
 							return Err("bad order status");
 						} 
@@ -434,6 +444,8 @@ fn main() -> Result<(), &'static str> {
 					println!("{}", pkey_pem_view);
 				}
 
+				drop(borrow);
+				drop(pem_borrow);
 				config_file.discard_order()?;
 				return Ok(());
 			},
