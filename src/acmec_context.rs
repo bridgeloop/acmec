@@ -19,7 +19,7 @@ impl AcmecContext {
     }
     pub fn with_config_file(config_file: &ConfigFile, pem_passphrase: Option<OsString>) -> Result<Self, &'static str> {
         let borrow = config_file.account_details();
-        let account_details = borrow.as_ref().ok_or("invalid config file")?;
+        let account_details = borrow.as_ref().expect("invalid config file");
         let kp = pem_to_keypair(&(account_details.pem_kp), pem_passphrase)?;
         let mut context = Self::new(kp);
         context.set_key_id(account_details.kid.clone());

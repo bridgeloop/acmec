@@ -54,7 +54,7 @@ use acmec_context::AcmecContext;
 mod lazy_mut;
 
 fn stringify_ser<T: serde::ser::Serialize>(s: T) -> Result<String, &'static str> {
-	return serde_json::to_string(&s).map_err(|_| "failed to stringify");
+	return serde_json::to_string(&(s)).map_err(|_| "failed to stringify");
 }
 fn stringify<T: AsRef<str>>(s: T) -> Result<String, &'static str> {
 	return stringify_ser(s.as_ref());
@@ -92,7 +92,7 @@ fn b64ue<T: AsRef<[u8]>>(u8s: T) -> String {
 
 fn ektyn(kp: &PKey<Private>) -> Result<String, &'static str> {
 	let rsa = kp
-		.rsa() // why does everything have to fucking copy
+		.rsa()
 		.map_err(|_| "kp.rsa() failed")?;
 	let e = stringify(b64ue(rsa.e().to_vec()))?;
 	let n = stringify(b64ue(rsa.n().to_vec()))?;
@@ -305,7 +305,7 @@ fn main() -> Result<(), &'static str> {
 
 			println!("REALLY delete \"{}\"? this cannot be undone! [yes / any other line]", config_file.path());
 			let mut buf = String::new();
-			std::io::stdin().read_line(&mut(buf)).map_err(|_| "failed to read line from stdin")?;
+			std::io::stdin().read_line(&mut(buf)).expect("failed to read line from stdin");
 			if buf != "yes\n" {
 				return Err("aborted; did not delete account");
 			}
@@ -355,7 +355,11 @@ fn main() -> Result<(), &'static str> {
 					for auth_url in &(order.authorizations) {
 						let resp = acme_post(&mut(context), auth_url, NO_PAYLOAD)?;
 						let auth: AcmeAuthorization = decode_response(resp)?;
-						let challenge: AcmeChallenge = auth.challenges.into_iter().find(|challenge| &(challenge.r#type) == "dns-01").ok_or("no dns-01 challenge")?;
+						let Some(challenge) = auth.challenges.into_iter().find(|challenge| &(challenge.r#type) == "dns-01") else {
+							eprintln!("no dns-01 challenge for {}", auth.identifier.value);
+							// to-do: additional error handling if there are no dns-01 challenges _at all_ (for any dns name)?
+							continue;
+						};
 						challenge_urls.push(challenge.url);
 						output_string += &(format!("_acme-challenge.{} {}", auth.identifier.value, token_shit(context.keypair(), challenge.token)?));
 					}
@@ -381,7 +385,7 @@ fn main() -> Result<(), &'static str> {
 					let mut pkey_file = CleanFile::open(pkey_path, true)?;
 
 					for url in &(order.challenges) {
-						acme_post(&mut(context), &(url), r#"{}"#)?;
+						acme_post(&mut(context), &(url), "{}")?;
 					}
 					loop {
 						let resp = acme_post(&mut(context), &(order.url), NO_PAYLOAD)?;
@@ -412,7 +416,7 @@ fn main() -> Result<(), &'static str> {
 						(cert_kp, pem_borrow.as_ref().unwrap())
 					};
 
-					let pkey_pem_view = from_utf8(&(pkey_pem)).map_err(|_| "invalid utf-8 bytes in pem-encoded private key")?;
+					let pkey_pem_view = from_utf8(&(pkey_pem)).expect("invalid utf-8 bytes in pem-encoded private key");
 
 					acme_post(
 						&mut(context), &(order.finalize),
@@ -441,7 +445,7 @@ fn main() -> Result<(), &'static str> {
 						sleep(Duration::from_secs(3));
 					};
 
-					let cert = acme_post(&mut(context), &(acme_order.certificate.ok_or("expected acme certificate")?), NO_PAYLOAD)?
+					let cert = acme_post(&mut(context), &(acme_order.certificate.expect("expected response to contain certificate")), NO_PAYLOAD)?
 						.text()
 						.map_err(|_| "failed to read response")?;
 
