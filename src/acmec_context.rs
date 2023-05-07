@@ -1,34 +1,46 @@
-use std::cell::{RefCell, RefMut};
+use std::{ffi::OsString, rc::Rc};
 use reqwest::blocking::Client as HttpClient;
-use openssl::pkey::{self, PKey};
+use openssl::pkey::{PKey, Private};
+
+use crate::{ConfigFile, lazy_mut::LazyMut, pem_to_keypair};
 
 #[derive(Debug)]
-pub struct AcmecContext<'a> {
-	http_client: RefCell<HttpClient>,
-	keypair: &'a pkey::PKey<pkey::Private>,
-	key_id: Option<String>,
+pub struct AcmecContext {
+	http_client: LazyMut<HttpClient>,
+	keypair: PKey<Private>,
+	key_id: Option<Rc<String>>,
 }
 
-impl<'a> AcmecContext<'a> {
-    pub fn new(keypair: &'a PKey<pkey::Private>) -> Self {
+impl AcmecContext {
+    pub fn new(keypair: PKey<Private>) -> Self {
     	Self {
-    		http_client: RefCell::new(HttpClient::new()), keypair, key_id: None,
+    		http_client: LazyMut::default(), keypair, key_id: None,
     	}
     }
+    pub fn with_config_file(config_file: &ConfigFile, pem_passphrase: Option<OsString>) -> Result<Self, &'static str> {
+        let borrow = config_file.account_details();
+        let account_details = borrow.as_ref().ok_or("invalid config file")?;
+        let kp = pem_to_keypair(&(account_details.pem_kp), pem_passphrase)?;
+        let mut context = Self::new(kp);
+        context.set_key_id(account_details.kid.clone());
+        drop(borrow);
 
-    pub fn http_client(&self) -> RefMut<'_, HttpClient> {
-    	return self.http_client.borrow_mut();
+        return Ok(context);
     }
 
-    pub fn keypair(&self) -> &pkey::PKey<pkey::Private> {
-    	return self.keypair;
+    pub fn http_client(&mut self) -> &mut HttpClient {
+    	return &mut(self.http_client);
+    }
+
+    pub fn keypair(&self) -> &PKey<Private> {
+    	return &(self.keypair);
     }
 
     pub fn set_key_id(&mut self, key_id: String) {
-    	self.key_id = Some(key_id);
+    	self.key_id = Some(Rc::new(key_id));
     	return;
     }
-    pub fn key_id(&self) -> Option<&String> {
-    	return self.key_id.as_ref();
+    pub fn key_id(&self) -> Option<Rc<String>> {
+    	return self.key_id.clone();
     }
 }

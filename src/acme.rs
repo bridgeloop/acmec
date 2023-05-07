@@ -30,9 +30,18 @@ pub struct AcmeOrder {
 	pub certificate: Option<String>,
 }
 
+#[cfg(debug_assertions)]
+pub mod relevant_directory {
+	pub static NEW_NONCE: &'static str = "https://acme-staging-v02.api.letsencrypt.org/acme/new-nonce";
+	pub static NEW_ACCOUNT: &'static str = "https://acme-staging-v02.api.letsencrypt.org/acme/new-acct";
+	pub static NEW_ORDER: &'static str = "https://acme-staging-v02.api.letsencrypt.org/acme/new-order";
+	pub static TOS: &'static str = "https://letsencrypt.org/documents/LE-SA-v1.3-September-21-2022.pdf";
+}
+
+#[cfg(not(debug_assertions))]
 pub mod relevant_directory {
 	pub static NEW_NONCE: &'static str = "https://acme-v02.api.letsencrypt.org/acme/new-nonce";
 	pub static NEW_ACCOUNT: &'static str = "https://acme-v02.api.letsencrypt.org/acme/new-acct";
 	pub static NEW_ORDER: &'static str = "https://acme-v02.api.letsencrypt.org/acme/new-order";
-	pub static TOS: &'static str = "https://letsencrypt.org/documents/LE-SA-v1.2-November-15-2017.pdf";
+	pub static TOS: &'static str = "https://letsencrypt.org/documents/LE-SA-v1.3-September-21-2022.pdf";
 }
