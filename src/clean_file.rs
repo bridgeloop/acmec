@@ -39,7 +39,7 @@ impl CleanFile {
 	}
 
 	pub fn file(&self) -> Result<&File, &'static str> {
-		return self.file.as_ref().ok_or("failed deleted");
+		return self.file.as_ref().ok_or("file deleted");
 	}
 
 	pub fn path(&self) -> &str {
