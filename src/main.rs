@@ -38,12 +38,10 @@ use openssl::{
 };
 use reqwest::{self, header::HeaderValue, blocking::{Client as HttpClient, Response as HttpResponse}};
 use {serde, serde_json};
+use dropfile::DropFile;
 
 mod acme;
 use acme::*;
-
-mod clean_file;
-use clean_file::*;
 
 mod config_file;
 use config_file::*;
@@ -303,7 +301,7 @@ fn main() -> Result<(), &'static str> {
 			let config_file = ConfigFile::open(config_path, false)?;
 			let mut context = AcmecContext::with_config_file(&(config_file), pem_passphrase)?;
 
-			println!("REALLY delete \"{}\"? this cannot be undone! [yes / any other line]", config_file.path());
+			println!("REALLY delete \"{}\"? this cannot be undone! [yes / any other line]", config_file.path().display());
 			let mut buf = String::new();
 			std::io::stdin().read_line(&mut(buf)).expect("failed to read line from stdin");
 			if buf != "yes\n" {
@@ -381,8 +379,8 @@ fn main() -> Result<(), &'static str> {
 					let cert_path = args_iter.next().ok_or("expected path to cert file")?;
 					let pkey_path = args_iter.next().ok_or("expected path to pkey file")?;
 
-					let mut cert_file = CleanFile::open(cert_path, true)?;
-					let mut pkey_file = CleanFile::open(pkey_path, true)?;
+					let mut cert_file = DropFile::open(cert_path, true)?;
+					let mut pkey_file = DropFile::open(pkey_path, true)?;
 
 					for url in &(order.challenges) {
 						acme_post(&mut(context), &(url), "{}")?;
@@ -449,11 +447,11 @@ fn main() -> Result<(), &'static str> {
 						.text()
 						.map_err(|_| "failed to read response")?;
 
-					if let Err(_) = cert_file.write(&(cert)) {
+					if let Err(_) = cert_file.write_trunc(cert.as_bytes()) {
 						eprintln!("failed to write certificate to file, printing to stdout instead");
 						println!("{}", cert);
 					}
-					if let Err(_) = pkey_file.write(&*(pkey_pem)) {
+					if let Err(_) = pkey_file.write_trunc(pkey_pem) {
 						eprintln!("failed to write private key to file, printing to stdout instead");
 						println!("{}", pkey_pem_view);
 					}
@@ -488,14 +486,14 @@ fn main() -> Result<(), &'static str> {
 				builder.sign(&(kp), MessageDigest::sha256()).unwrap();
 				let cert_pem = builder.build().to_pem().map_err(|_| "failed to encode certificate as pem")?;
 
-				let mut cert_file = CleanFile::open(cert_path, true)?;
-				let mut priv_file = CleanFile::open(key_path, true)?;
+				let mut cert_file = DropFile::open(cert_path, true)?;
+				let mut priv_file = DropFile::open(key_path, true)?;
 
-				if let Err(_) = cert_file.write(&(cert_pem)) {
+				if let Err(_) = cert_file.write_trunc(&(cert_pem)) {
 					eprintln!("failed to write certificate! printing to stdout instead...");
 					println!("{}", from_utf8(&(cert_pem)).unwrap());
 				}
-				if let Err(_) = priv_file.write(&(priv_pem)) {
+				if let Err(_) = priv_file.write_trunc(&(priv_pem)) {
 					eprintln!("failed to write private key! printing to stdout instead...");
 					println!("{}", from_utf8(&(priv_pem)).unwrap());
 				}

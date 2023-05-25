@@ -1,5 +1,6 @@
-use std::ops::{Deref, DerefMut};
-use crate::{clean_file::CleanFile, stringify_ser};
+use std::{ops::{Deref, DerefMut}, path::Path};
+use crate::stringify_ser;
+use dropfile::DropFile;
 
 mod acmec_config;
 use acmec_config::AcmecConfig;
@@ -22,20 +23,20 @@ pub struct OrderDetails {
 }
 
 pub struct ConfigFile {
-	clean_file: Option<CleanFile>,
+	file: Option<DropFile>,
 	config: AcmecConfig,
 }
 impl ConfigFile {
 	pub fn open(path: String, create: bool) -> Result<Self, &'static str> {
-		let clean_file = CleanFile::open(path, create)?;
-		let config: AcmecConfig = serde_json::from_reader(clean_file.file().unwrap()).unwrap_or_default();
-		return Ok(Self { clean_file: Some(clean_file), config, });		
+		let mut file = DropFile::open(path, create)?;
+		let config: AcmecConfig = serde_json::from_reader(&mut(file)).unwrap_or_default();
+		return Ok(Self { file: Some(file), config, });		
 	}
 	pub fn delete(mut self) -> Result<(), &'static str> {
-		return self.clean_file.take().unwrap().delete();
+		return self.file.take().unwrap().delete();
 	}
-	pub fn path(&self) -> &str {
-		return self.clean_file.as_ref().unwrap().path();
+	pub fn path(&self) -> &Path {
+		return self.file.as_ref().unwrap().path();
 	}
 }
 impl Deref for ConfigFile {
@@ -51,12 +52,12 @@ impl DerefMut for ConfigFile {
 }
 impl Drop for ConfigFile {
 	fn drop(&mut self) {
-		let Some(mut clean_file) = self.clean_file.take() else {
+		let Some(mut file) = self.file.take() else {
 			return;
 		};
 		if self.changed() {
 			let json_config = stringify_ser(&(self.config)).unwrap();
-			clean_file.write(json_config).unwrap();
+			file.write_trunc(json_config.as_bytes()).unwrap();
 		}
 	}
 }
